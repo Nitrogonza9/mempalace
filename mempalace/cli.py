@@ -264,6 +264,110 @@ def cmd_mcp(args):
         print(f"  {base_server_cmd} --palace /path/to/palace")
 
 
+def cmd_extract_kg(args):
+    """Auto-populate the knowledge graph from palace drawers."""
+    from .kg_extractor import extract_kg
+    from .knowledge_graph import KnowledgeGraph
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    kg_path = os.path.join(palace_path, "knowledge_graph.sqlite3")
+    kg = KnowledgeGraph(db_path=kg_path)
+    mode = "DRY RUN" if args.dry_run else "EXTRACT"
+    print(f"\n{'=' * 55}")
+    print(f"  Knowledge Graph Auto-Extract ({mode})")
+    print(f"  Palace: {palace_path}")
+    if args.wing:
+        print(f"  Wing filter: {args.wing}")
+    if args.room:
+        print(f"  Room filter: {args.room}")
+    print(f"{'=' * 55}\n")
+    result = extract_kg(palace_path=palace_path, kg=kg, wing=args.wing, room=args.room, dry_run=args.dry_run)
+    print(f"  Drawers scanned:  {result.drawers_scanned}")
+    print(f"  Entities found:   {result.entities_found}")
+    print(f"  Patterns matched: {result.patterns_matched}")
+    print(f"  Triples added:    {result.triples_added}")
+    print(f"  Triples skipped:  {result.triples_skipped} (already in KG)")
+    if result.errors:
+        for err in result.errors[:5]:
+            print(f"    - {err}")
+    if result.details:
+        print("\n  Sample extractions:")
+        for t in result.details[:10]:
+            print(f"    {t['subject']} → {t['predicate']} → {t['object']}")
+    if not args.dry_run:
+        stats = kg.stats()
+        print(f"\n  KG totals: {stats['entities']} entities, {stats['triples']} triples")
+    print(f"\n{'=' * 55}\n")
+
+
+def cmd_export(args):
+    """Export palace data to a portable JSON file."""
+    from .exporter import export_palace
+    from .knowledge_graph import KnowledgeGraph
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    output_file = args.output
+    kg_path = os.path.join(palace_path, "knowledge_graph.sqlite3")
+    kg = KnowledgeGraph(db_path=kg_path) if os.path.exists(kg_path) else None
+    print(f"\n{'=' * 55}")
+    print("  Palace Export")
+    print(f"  Palace: {palace_path}")
+    print(f"  Output: {output_file}")
+    print(f"{'=' * 55}\n")
+    result = export_palace(palace_path=palace_path, output_file=output_file, kg=kg)
+    print(f"  Drawers exported:     {result.drawers_exported}")
+    print(f"  KG entities exported: {result.kg_entities_exported}")
+    print(f"  KG triples exported:  {result.kg_triples_exported}")
+    if result.errors:
+        for err in result.errors[:5]:
+            print(f"    - {err}")
+    else:
+        size = os.path.getsize(output_file)
+        print(f"\n  Saved: {output_file} ({size:,} bytes)")
+    print(f"\n{'=' * 55}\n")
+
+
+def cmd_import(args):
+    """Import palace data from a JSON export file."""
+    from .exporter import import_palace
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    input_file = args.input_file
+    print(f"\n{'=' * 55}")
+    print("  Palace Import")
+    print(f"  From:   {input_file}")
+    print(f"  Palace: {palace_path}")
+    print(f"{'=' * 55}\n")
+    result = import_palace(input_file=input_file, palace_path=palace_path)
+    print(f"  Drawers imported:     {result.drawers_imported}")
+    print(f"  Drawers skipped:      {result.drawers_skipped} (already existed)")
+    print(f"  KG entities imported: {result.kg_entities_imported}")
+    print(f"  KG triples imported:  {result.kg_triples_imported}")
+    if result.errors:
+        for err in result.errors[:5]:
+            print(f"    - {err}")
+    print(f"\n{'=' * 55}\n")
+
+
+def cmd_doctor(args):
+    """Run diagnostic checks on the palace."""
+    from .doctor import diagnose
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    print(f"\n{'=' * 55}")
+    print("  Palace Doctor")
+    print(f"  Palace: {palace_path}")
+    print(f"{'=' * 55}\n")
+    report = diagnose(palace_path)
+    for check in report.checks:
+        icon = {"OK": "+", "WARN": "!", "ERROR": "X"}[check.status]
+        print(f"  [{icon}] {check.name}: {check.message}")
+        if check.details:
+            print(f"      {check.details}")
+    print(f"\n  Summary: {report.summary}")
+    print(f"\n{'=' * 55}\n")
+
+
 def cmd_compress(args):
     """Compress drawers in a wing using AAAK Dialect."""
     import chromadb
@@ -530,6 +634,23 @@ def main():
         help="Show MCP setup command for connecting MemPalace to your AI client",
     )
 
+    # extract-kg
+    p_extract = sub.add_parser("extract-kg", help="Auto-populate knowledge graph from palace drawers")
+    p_extract.add_argument("--wing", default=None, help="Filter by wing")
+    p_extract.add_argument("--room", default=None, help="Filter by room")
+    p_extract.add_argument("--dry-run", action="store_true", help="Preview without writing to KG")
+
+    # export
+    p_export = sub.add_parser("export", help="Export palace to a portable JSON file")
+    p_export.add_argument("output", help="Output JSON file path")
+
+    # import
+    p_import = sub.add_parser("import", help="Import palace from a JSON export file")
+    p_import.add_argument("input_file", help="Input JSON file path")
+
+    # doctor
+    sub.add_parser("doctor", help="Run diagnostic checks on palace health")
+
     # status
     sub.add_parser("status", help="Show what's been filed")
 
@@ -563,6 +684,10 @@ def main():
         "search": cmd_search,
         "mcp": cmd_mcp,
         "compress": cmd_compress,
+        "extract-kg": cmd_extract_kg,
+        "export": cmd_export,
+        "import": cmd_import,
+        "doctor": cmd_doctor,
         "wake-up": cmd_wakeup,
         "repair": cmd_repair,
         "status": cmd_status,

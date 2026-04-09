@@ -471,6 +471,47 @@ def tool_kg_stats():
     return _kg.stats()
 
 
+def tool_check_facts(text: str):
+    """Check a statement for contradictions against the knowledge graph."""
+    from mempalace.fact_checker import check_assertion
+
+    result = check_assertion(text, _kg)
+    return result.to_dict()
+
+
+def tool_kg_extract(wing: str = None, room: str = None, dry_run: bool = False):
+    """Auto-populate the knowledge graph from palace drawers."""
+    from mempalace.kg_extractor import extract_kg
+
+    palace_path = _config.palace_path
+    result = extract_kg(palace_path=palace_path, kg=_kg, wing=wing, room=room, dry_run=dry_run)
+    return result.to_dict()
+
+
+def tool_export(output_file: str):
+    """Export palace data to a portable JSON file."""
+    from mempalace.exporter import export_palace
+
+    result = export_palace(palace_path=_config.palace_path, output_file=output_file, kg=_kg)
+    return result.to_dict()
+
+
+def tool_import(input_file: str):
+    """Import palace data from a JSON export file."""
+    from mempalace.exporter import import_palace
+
+    result = import_palace(input_file=input_file, palace_path=_config.palace_path, kg=_kg)
+    return result.to_dict()
+
+
+def tool_doctor():
+    """Run diagnostic checks on palace health."""
+    from mempalace.doctor import diagnose
+
+    report = diagnose(_config.palace_path)
+    return report.to_dict()
+
+
 # ==================== AGENT DIARY ====================
 
 
@@ -508,13 +549,20 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
     )
 
     try:
-        # TODO: Future versions should expand AAAK before embedding to improve
-        # semantic search quality. For now, store raw AAAK in metadata so it's
-        # preserved, and keep the document as-is for embedding (even though
-        # compressed AAAK degrades embedding quality).
+        # If entry is AAAK-compressed, expand it for better embedding quality
+        # while preserving the original compressed form in metadata.
+        from mempalace.dialect import Dialect
+
+        _dialect = Dialect()
+        embed_text = entry
+        meta_extra = {}
+        if _dialect.looks_like_aaak(entry):
+            embed_text = _dialect.expand(entry)
+            meta_extra["aaak_compressed"] = entry
+
         col.add(
             ids=[entry_id],
-            documents=[entry],
+            documents=[embed_text],
             metadatas=[
                 {
                     "wing": wing,
@@ -525,6 +573,7 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general"):
                     "agent": agent_name,
                     "filed_at": now.isoformat(),
                     "date": now.strftime("%Y-%m-%d"),
+                    **meta_extra,
                 }
             ],
         )
@@ -698,6 +747,56 @@ TOOLS = {
         "description": "Knowledge graph overview: entities, triples, current vs expired facts, relationship types.",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_kg_stats,
+    },
+    "mempalace_check_facts": {
+        "description": "Check a statement for contradictions against the knowledge graph. Returns RED (direct conflict), YELLOW (numeric mismatch), or GREEN (no conflict).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Natural language assertion to fact-check"},
+            },
+            "required": ["text"],
+        },
+        "handler": tool_check_facts,
+    },
+    "mempalace_kg_extract": {
+        "description": "Auto-populate the knowledge graph by extracting relationships from palace drawers. Idempotent.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wing": {"type": "string", "description": "Filter by wing (optional)"},
+                "room": {"type": "string", "description": "Filter by room (optional)"},
+                "dry_run": {"type": "boolean", "description": "Preview without writing (default: false)"},
+            },
+        },
+        "handler": tool_kg_extract,
+    },
+    "mempalace_export": {
+        "description": "Export all palace data to a portable JSON file for backup or migration.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "output_file": {"type": "string", "description": "Path for the output JSON file"},
+            },
+            "required": ["output_file"],
+        },
+        "handler": tool_export,
+    },
+    "mempalace_import": {
+        "description": "Import palace data from a JSON export file. Skips existing drawers.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "input_file": {"type": "string", "description": "Path to the JSON export file"},
+            },
+            "required": ["input_file"],
+        },
+        "handler": tool_import,
+    },
+    "mempalace_doctor": {
+        "description": "Run diagnostic checks on palace health. Read-only.",
+        "input_schema": {"type": "object", "properties": {}},
+        "handler": tool_doctor,
     },
     "mempalace_traverse": {
         "description": "Walk the palace graph from a room. Shows connected ideas across wings — the tunnels. Like following a thread through the palace: start at 'chromadb-setup' in wing_code, discover it connects to wing_myproject (planning) and wing_user (feelings about it).",
