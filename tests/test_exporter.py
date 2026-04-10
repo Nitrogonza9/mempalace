@@ -9,8 +9,13 @@ import json
 import os
 
 from mempalace.exporter import (
+    auto_export,
+    auto_import,
+    backup_palace,
     export_palace,
+    export_palace_jsonl,
     import_palace,
+    import_palace_jsonl,
     EXPORT_FORMAT,
     EXPORT_VERSION,
 )
@@ -242,3 +247,128 @@ class TestResultSerialization:
         assert "success" in d
         assert "drawers_imported" in d
         assert "drawers_skipped" in d
+
+
+# ── JSONL format tests ──────────────────────────────────────────────
+
+
+class TestJsonlExport:
+    def test_export_jsonl(self, palace_path, seeded_collection, tmp_dir):
+        out = os.path.join(tmp_dir, "export_jsonl")
+        result = export_palace_jsonl(palace_path=palace_path, output_dir=out)
+
+        assert result.success
+        assert result.drawers_exported == 4
+
+        # Check JSONL files exist organized by wing/room
+        assert os.path.exists(os.path.join(out, "project", "backend.jsonl"))
+        assert os.path.exists(os.path.join(out, "project", "frontend.jsonl"))
+        assert os.path.exists(os.path.join(out, "notes", "planning.jsonl"))
+
+        # Each line should be valid JSON with id/document/metadata
+        with open(os.path.join(out, "project", "backend.jsonl"), "r") as f:
+            for line in f:
+                drawer = json.loads(line)
+                assert "id" in drawer
+                assert "document" in drawer
+                assert "metadata" in drawer
+
+    def test_export_jsonl_includes_kg(self, palace_path, seeded_collection, seeded_kg, tmp_dir):
+        out = os.path.join(tmp_dir, "export_jsonl")
+        result = export_palace_jsonl(palace_path=palace_path, output_dir=out, kg=seeded_kg)
+
+        assert result.kg_entities_exported > 0
+        assert os.path.exists(os.path.join(out, "_kg.json"))
+
+
+class TestJsonlImport:
+    def test_import_jsonl(self, palace_path, seeded_collection, seeded_kg, tmp_dir):
+        # Export first
+        export_dir = os.path.join(tmp_dir, "export_jsonl")
+        export_palace_jsonl(palace_path=palace_path, output_dir=export_dir, kg=seeded_kg)
+
+        # Import into a fresh palace
+        new_palace = os.path.join(tmp_dir, "new_palace")
+        from mempalace.knowledge_graph import KnowledgeGraph
+
+        new_kg = KnowledgeGraph(db_path=os.path.join(tmp_dir, "new_kg.sqlite3"))
+        result = import_palace_jsonl(input_dir=export_dir, palace_path=new_palace, kg=new_kg)
+
+        assert result.drawers_imported == 4
+        assert result.kg_entities_imported > 0
+
+    def test_import_jsonl_skips_existing(self, palace_path, seeded_collection, tmp_dir):
+        export_dir = os.path.join(tmp_dir, "export_jsonl")
+        export_palace_jsonl(palace_path=palace_path, output_dir=export_dir)
+
+        # Import back into the same palace
+        result = import_palace_jsonl(input_dir=export_dir, palace_path=palace_path)
+        assert result.drawers_skipped == 4
+        assert result.drawers_imported == 0
+
+
+# ── Auto-detection tests ─────────────────────────────────────────────
+
+
+class TestAutoFormatDetection:
+    def test_auto_export_json_file(self, palace_path, seeded_collection, tmp_dir):
+        out = os.path.join(tmp_dir, "out.json")
+        result = auto_export(palace_path=palace_path, output=out)
+        assert result.success
+        assert os.path.isfile(out)
+
+    def test_auto_export_directory(self, palace_path, seeded_collection, tmp_dir):
+        out = os.path.join(tmp_dir, "out_dir")
+        result = auto_export(palace_path=palace_path, output=out)
+        assert result.success
+        assert os.path.isdir(out)
+
+    def test_auto_export_format_override(self, palace_path, seeded_collection, tmp_dir):
+        # Override: force JSON even for a non-.json path
+        out = os.path.join(tmp_dir, "force_json")
+        result = auto_export(palace_path=palace_path, output=out, format="json")
+        assert result.success
+        assert os.path.isfile(out)
+
+    def test_auto_import_file(self, palace_path, seeded_collection, tmp_dir):
+        out = os.path.join(tmp_dir, "out.json")
+        export_palace(palace_path=palace_path, output_file=out)
+        new_palace = os.path.join(tmp_dir, "new")
+        result = auto_import(input_path=out, palace_path=new_palace)
+        assert result.drawers_imported == 4
+
+    def test_auto_import_directory(self, palace_path, seeded_collection, tmp_dir):
+        out = os.path.join(tmp_dir, "out_dir")
+        export_palace_jsonl(palace_path=palace_path, output_dir=out)
+        new_palace = os.path.join(tmp_dir, "new")
+        result = auto_import(input_path=out, palace_path=new_palace)
+        assert result.drawers_imported == 4
+
+
+# ── Binary backup tests ──────────────────────────────────────────────
+
+
+class TestBackup:
+    def test_backup_directory(self, palace_path, seeded_collection, tmp_dir):
+        result = backup_palace(palace_path=palace_path, max_backups=0)
+        assert result.success
+        assert os.path.isdir(result.backup_path)
+        assert result.size_bytes > 0
+
+    def test_backup_zip(self, palace_path, seeded_collection, tmp_dir):
+        result = backup_palace(palace_path=palace_path, zip_mode=True, max_backups=0)
+        assert result.success
+        assert result.backup_path.endswith(".zip")
+        assert os.path.isfile(result.backup_path)
+
+    def test_backup_no_palace(self, tmp_dir):
+        result = backup_palace(palace_path=os.path.join(tmp_dir, "missing"))
+        assert not result.success
+        assert len(result.errors) > 0
+
+    def test_backup_result_to_dict(self, palace_path, seeded_collection):
+        result = backup_palace(palace_path=palace_path, max_backups=0)
+        d = result.to_dict()
+        assert "success" in d
+        assert "backup_path" in d
+        assert "size_mb" in d

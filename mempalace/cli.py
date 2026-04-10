@@ -265,12 +265,13 @@ def cmd_mcp(args):
 
 
 def cmd_export(args):
-    """Export palace data to a portable JSON file."""
-    from .exporter import export_palace
+    """Export palace data — auto-detects format from output path."""
+    from .exporter import auto_export
     from .knowledge_graph import KnowledgeGraph
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
-    output_file = args.output
+    output = args.output
+    fmt = args.format
 
     kg_path = os.path.join(palace_path, "knowledge_graph.sqlite3")
     kg = KnowledgeGraph(db_path=kg_path) if os.path.exists(kg_path) else None
@@ -278,10 +279,11 @@ def cmd_export(args):
     print(f"\n{'=' * 55}")
     print("  Palace Export")
     print(f"  Palace: {palace_path}")
-    print(f"  Output: {output_file}")
+    print(f"  Output: {output}")
+    print(f"  Format: {fmt}")
     print(f"{'=' * 55}\n")
 
-    result = export_palace(palace_path=palace_path, output_file=output_file, kg=kg)
+    result = auto_export(palace_path=palace_path, output=output, kg=kg, format=fmt)
 
     print(f"  Drawers exported:     {result.drawers_exported}")
     print(f"  KG entities exported: {result.kg_entities_exported}")
@@ -291,27 +293,29 @@ def cmd_export(args):
         print(f"\n  Errors ({len(result.errors)}):")
         for err in result.errors[:5]:
             print(f"    - {err}")
+    elif os.path.isfile(output):
+        size = os.path.getsize(output)
+        print(f"\n  Saved: {output} ({size:,} bytes)")
     else:
-        size = os.path.getsize(output_file)
-        print(f"\n  Saved: {output_file} ({size:,} bytes)")
+        print(f"\n  Saved: {output}/")
 
     print(f"\n{'=' * 55}\n")
 
 
 def cmd_import(args):
-    """Import palace data from a JSON export file."""
-    from .exporter import import_palace
+    """Import palace data — auto-detects format from input path."""
+    from .exporter import auto_import
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
-    input_file = args.input_file
+    input_path = args.input_path
 
     print(f"\n{'=' * 55}")
     print("  Palace Import")
-    print(f"  From:   {input_file}")
+    print(f"  From:   {input_path}")
     print(f"  Palace: {palace_path}")
     print(f"{'=' * 55}\n")
 
-    result = import_palace(input_file=input_file, palace_path=palace_path)
+    result = auto_import(input_path=input_path, palace_path=palace_path)
 
     print(f"  Drawers imported:     {result.drawers_imported}")
     print(f"  Drawers skipped:      {result.drawers_skipped} (already existed)")
@@ -320,6 +324,32 @@ def cmd_import(args):
 
     if result.errors:
         print(f"\n  Errors ({len(result.errors)}):")
+        for err in result.errors[:5]:
+            print(f"    - {err}")
+
+    print(f"\n{'=' * 55}\n")
+
+
+def cmd_backup(args):
+    """Create a binary backup of the palace (fast restore, no re-embedding)."""
+    from .exporter import backup_palace
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+
+    print(f"\n{'=' * 55}")
+    print("  Palace Backup")
+    print(f"  Palace: {palace_path}")
+    print(f"  Mode:   {'zip' if args.zip else 'directory'}")
+    print(f"{'=' * 55}\n")
+
+    result = backup_palace(palace_path=palace_path, zip_mode=args.zip, max_backups=args.max_backups)
+
+    if result.success:
+        print(f"  Backup: {result.backup_path}")
+        print(f"  Size:   {result.size_mb:.1f} MB")
+        if result.pruned:
+            print(f"  Pruned: {len(result.pruned)} old backup(s)")
+    else:
         for err in result.errors[:5]:
             print(f"    - {err}")
 
@@ -593,12 +623,39 @@ def main():
     )
 
     # export
-    p_export = sub.add_parser("export", help="Export palace to a portable JSON file")
-    p_export.add_argument("output", help="Output JSON file path")
+    p_export = sub.add_parser(
+        "export",
+        help="Export palace (auto: .json file or directory of JSONL per wing/room)",
+    )
+    p_export.add_argument("output", help="Output path (.json file or directory)")
+    p_export.add_argument(
+        "--format",
+        choices=["auto", "json", "jsonl"],
+        default="auto",
+        help="Export format (auto-detected from output path by default)",
+    )
 
     # import
-    p_import = sub.add_parser("import", help="Import palace from a JSON export file")
-    p_import.add_argument("input_file", help="Input JSON file path")
+    p_import = sub.add_parser(
+        "import",
+        help="Import palace (auto: .json file or directory of JSONL per wing/room)",
+    )
+    p_import.add_argument("input_path", help="Input path (.json file or directory)")
+
+    # backup (binary, fast restore — no re-embedding)
+    p_backup = sub.add_parser(
+        "backup",
+        help="Create a binary backup of the palace (fast restore, no re-embedding)",
+    )
+    p_backup.add_argument(
+        "--zip", action="store_true", help="Create a zip archive instead of a directory copy"
+    )
+    p_backup.add_argument(
+        "--max-backups",
+        type=int,
+        default=5,
+        help="Maximum number of backups to retain (default: 5, 0 = unlimited)",
+    )
 
     # status
     sub.add_parser("status", help="Show what's been filed")
@@ -635,6 +692,7 @@ def main():
         "compress": cmd_compress,
         "export": cmd_export,
         "import": cmd_import,
+        "backup": cmd_backup,
         "wake-up": cmd_wakeup,
         "repair": cmd_repair,
         "status": cmd_status,
